@@ -5,3 +5,8 @@ node_modules/
 .DS_Store
 coverage/
 .agents/
+
+# TEMPORARY API test harness (backend/public/_apitest.html) - not part of the
+# deliverable. Uncomment while testing locally so it never lands in a teammate's
+# clone:
+# backend/public/_apitest.html
