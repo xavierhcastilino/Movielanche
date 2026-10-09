@@ -1,5 +1,6 @@
 const express = require('express');
 const db = require('../config/db');
+const { qString, qId, escapeLike } = require('../config/validate');
 
 const router = express.Router();
 
@@ -28,9 +29,12 @@ function toCard(row) {
   };
 }
 
-/** Postgres DATE columns arrive as JS Date in UTC. */
+/**
+ * Postgres DATE columns arrive as raw 'YYYY-MM-DD' strings (config/db.js
+ * overrides the type parser) so no timezone conversion can shift them.
+ */
 function toDateString(value) {
-  return value instanceof Date ? value.toISOString().slice(0, 10) : String(value);
+  return value == null ? null : String(value).slice(0, 10);
 }
 
 /** TIME columns arrive as 'HH:mm:ss'. */
@@ -38,14 +42,28 @@ function toTimeString(value) {
   return String(value).slice(0, 5);
 }
 
+/** Clamped pagination; returns null when the caller sent something invalid. */
+function parsePaging(query) {
+  const limitRaw = qString(query.limit);
+  const offsetRaw = qString(query.offset);
+  const limit = limitRaw === null ? 50 : Number(limitRaw);
+  const offset = offsetRaw === null ? 0 : Number(offsetRaw);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) return null;
+  if (!Number.isInteger(offset) || offset < 0) return null;
+  return { limit, offset };
+}
+
 /**
- * GET /api/movies?search=&genre=&language=&filter=now_showing|coming_soon
+ * GET /api/movies?search=&genre=&language=&filter=now_showing|coming_soon&limit=&offset=
  *
  * Every parameter is optional and they combine with AND. `genre` matches any
  * element of the genres array, which is what a single-select filter needs.
  */
 router.get('/', async (req, res) => {
-  const { search, genre, language, filter } = req.query;
+  const search = qString(req.query.search);
+  const genre = qString(req.query.genre);
+  const language = qString(req.query.language);
+  const filter = qString(req.query.filter);
 
   if (filter && filter !== 'now_showing' && filter !== 'coming_soon') {
     return res.status(400).json({
@@ -53,12 +71,20 @@ router.get('/', async (req, res) => {
     });
   }
 
+  const paging = parsePaging(req.query);
+  if (!paging) {
+    return res.status(400).json({
+      error: { code: 'BAD_REQUEST', message: 'limit must be 1-100 and offset must be >= 0' },
+    });
+  }
+
   const where = [];
   const params = [];
 
-  if (search && search.trim()) {
-    params.push(`%${search.trim()}%`);
-    where.push(`title ILIKE $${params.length}`);
+  if (search) {
+    // Wildcards are escaped so a literal '%' searches for '%'.
+    params.push(`%${escapeLike(search)}%`);
+    where.push(`title ILIKE $${params.length} ESCAPE '\\'`);
   }
   if (genre) {
     params.push(genre);
@@ -73,18 +99,30 @@ router.get('/', async (req, res) => {
     where.push(`status = $${params.length}`);
   }
 
+  // Pushed BEFORE the SQL is built so the placeholder indices line up.
+  params.push(paging.limit, paging.offset);
+  const limitIdx = params.length - 1;
+  const offsetIdx = params.length;
+
   const sql = `
     SELECT id, title, description, genres, language, duration_min,
            poster_url, rating, release_year, status
     FROM movies
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-    ORDER BY title`;
+    ORDER BY title
+    LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
 
   try {
     const result = await db.query(sql, params);
     // public/app.js reads `data.success` / `data.data`, so the envelope is part
     // of the contract with the committed frontend.
-    return res.json({ success: true, count: result.rowCount, data: result.rows.map(toCard) });
+    return res.json({
+      success: true,
+      count: result.rowCount,
+      limit: paging.limit,
+      offset: paging.offset,
+      data: result.rows.map(toCard),
+    });
   } catch (err) {
     console.error('Error fetching movies:', err.message);
     return res.status(500).json({
@@ -101,9 +139,10 @@ router.get('/', async (req, res) => {
  * unknown location returns an empty list rather than a 404.
  */
 router.get('/near', async (req, res) => {
-  const { location, date } = req.query;
+  const location = qString(req.query.location);
+  const date = qString(req.query.date);
 
-  if (!location || !location.trim()) {
+  if (!location) {
     return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'location is required' } });
   }
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -123,9 +162,9 @@ router.get('/near', async (req, res) => {
        FROM shows s
        JOIN theatres t ON t.id = s.theatre_id
        JOIN movies m ON m.id = s.movie_id
-       WHERE t.location ILIKE $1 AND s.date = $2
+       WHERE t.location ILIKE $1 ESCAPE '\\' AND s.date = $2
        ORDER BY t.name, s.start_time`,
-      [`%${location.trim()}%`, date]
+      [`%${escapeLike(location)}%`, date]
     );
 
     const theatres = new Map();
@@ -151,7 +190,7 @@ router.get('/near', async (req, res) => {
       });
     }
 
-    return res.json({ location: location.trim(), date, theatres: [...theatres.values()] });
+    return res.json({ location, date, theatres: [...theatres.values()] });
   } catch (err) {
     console.error('Error fetching nearby shows:', err.message);
     return res.status(500).json({
@@ -162,10 +201,10 @@ router.get('/near', async (req, res) => {
 
 /** GET /api/movies/:id/shows?date=YYYY-MM-DD — shows grouped by theatre */
 router.get('/:id/shows', async (req, res) => {
-  const { id } = req.params;
-  const { date } = req.query;
+  const id = qId(req.params.id);
+  const date = qString(req.query.date);
 
-  if (!/^\d+$/.test(id)) {
+  if (id === null) {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Movie not found' } });
   }
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -216,9 +255,9 @@ router.get('/:id/shows', async (req, res) => {
 
 /** GET /api/movies/:id — detail view, including the dates that have shows */
 router.get('/:id', async (req, res) => {
-  const { id } = req.params;
+  const id = qId(req.params.id);
 
-  if (!/^\d+$/.test(id)) {
+  if (id === null) {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Movie not found' } });
   }
 

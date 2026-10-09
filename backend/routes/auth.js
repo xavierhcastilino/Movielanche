@@ -3,13 +3,18 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const express = require('express');
 const db = require('../config/db');
+const { isPlainObject, withinBcryptLimit } = require('../config/validate');
 
 const router = express.Router();
 
 const ACCESS_TTL_SECONDS = 15 * 60;
 const REFRESH_TTL_DAYS = 7;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const MIN_PASSWORD_LENGTH = 6;
+const MIN_PASSWORD_LENGTH = 8;
+const MAX_PASSWORD_LENGTH = 72; // bcrypt silently truncates beyond 72 bytes
+// A dummy hash compared against when no user matches, so an unknown email
+// costs the same wall-clock time as a known one and cannot be enumerated.
+const DUMMY_HASH = '$2b$10$CwTycUXWue0Thq9StjUM0uJ8.r5Fvz6m5tgEMoTi6L0IhRZ0kLwGzq';
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -19,7 +24,7 @@ function signAccessToken(user) {
   return jwt.sign(
     { sub: String(user.id), name: user.name, email: user.email, typ: 'access' },
     process.env.JWT_SECRET,
-    { expiresIn: ACCESS_TTL_SECONDS }
+    { expiresIn: ACCESS_TTL_SECONDS, algorithm: 'HS256' }
   );
 }
 
@@ -50,23 +55,37 @@ async function sessionPayload(user, req) {
 
 // POST /api/auth/register
 router.post('/register', async (req, res) => {
-  const { name, email, password } = req.body || {};
+  const body = isPlainObject(req.body) ? req.body : {};
+  const { name, email, password } = body;
 
-  if (!name || typeof name !== 'string' || !name.trim()) {
+  if (typeof name !== 'string' || !name.trim()) {
     return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'name is required' } });
   }
-  if (!email || typeof email !== 'string' || !EMAIL_RE.test(email)) {
+  if (typeof email !== 'string' || !EMAIL_RE.test(email)) {
     return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'A valid email is required' } });
   }
-  if (!password || typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH) {
+  if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH) {
     return res.status(400).json({
       error: { code: 'BAD_REQUEST', message: `password must be at least ${MIN_PASSWORD_LENGTH} characters` },
     });
   }
+  if (password.length > MAX_PASSWORD_LENGTH || !withinBcryptLimit(password)) {
+    // bcrypt ignores bytes past 72, so a longer password would silently lose
+    // its tail -- two different passwords could then authenticate the same.
+    return res.status(400).json({
+      error: { code: 'BAD_REQUEST', message: `password must be at most ${MAX_PASSWORD_LENGTH} bytes` },
+    });
+  }
 
+  const client = await db.pool.connect();
   try {
+    // The user row and its first refresh token are written together. Previously
+    // a failure issuing the token left an account the client never received
+    // credentials for, and the retry then failed with 409 EMAIL_TAKEN.
+    await client.query('BEGIN');
+
     const passwordHash = await bcrypt.hash(password, 10);
-    const inserted = await db.query(
+    const inserted = await client.query(
       `INSERT INTO users (name, email, password_hash)
        VALUES ($1, $2, $3)
        RETURNING id, name, email`,
@@ -74,24 +93,49 @@ router.post('/register', async (req, res) => {
     );
 
     const user = inserted.rows[0];
-    const payload = await sessionPayload(user, req);
-    return res.status(201).json({ ...payload, token: payload.accessToken });
+    const raw = crypto.randomBytes(48).toString('hex');
+    await client.query(
+      `INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at, user_agent)
+       VALUES ($1, $2, $3, NOW() + ($4 || ' days')::interval, $5)`,
+      [user.id, sha256(raw), crypto.randomUUID(), String(REFRESH_TTL_DAYS),
+       (req.get('user-agent') || '').slice(0, 200)]
+    );
+
+    await client.query('COMMIT');
+
+    const accessToken = signAccessToken(user);
+    return res.status(201).json({
+      accessToken,
+      refreshToken: raw,
+      expiresIn: ACCESS_TTL_SECONDS,
+      user: publicUser(user),
+      token: accessToken,
+    });
   } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     // 23505 = unique_violation on the email index.
     if (err.code === '23505') {
       return res.status(409).json({ error: { code: 'EMAIL_TAKEN', message: 'Email is already registered' } });
     }
     console.error('Registration error:', err.message);
     return res.status(500).json({ error: { code: 'SERVER_ERROR', message: 'Registration failed' } });
+  } finally {
+    client.release();
   }
 });
 
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
-  const { email, password } = req.body || {};
+  const body = isPlainObject(req.body) ? req.body : {};
+  const { email, password } = body;
 
-  if (!email || !password) {
-    return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'email and password are required' } });
+  // Type checks first: previously email.toLowerCase()/bcrypt.compare() threw
+  // on a JSON object or array, turning a client mistake into a 500.
+  if (typeof email !== 'string' || !email.trim()) {
+    return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'email is required' } });
+  }
+  if (typeof password !== 'string' || !password) {
+    return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'password is required' } });
   }
 
   try {
@@ -100,7 +144,15 @@ router.post('/login', async (req, res) => {
       [email.toLowerCase()]
     );
 
-    if (found.rowCount === 0 || !(await bcrypt.compare(password, found.rows[0].password_hash))) {
+    if (found.rowCount === 0) {
+      // Still pay the bcrypt cost, otherwise response time reveals which
+      // emails are registered.
+      await bcrypt.compare(password, DUMMY_HASH);
+      return res.status(401).json({ error: { code: 'INVALID_CREDENTIALS', message: 'Invalid email or password' } });
+    }
+
+    const ok = await bcrypt.compare(password, found.rows[0].password_hash);
+    if (!ok) {
       return res.status(401).json({ error: { code: 'INVALID_CREDENTIALS', message: 'Invalid email or password' } });
     }
 
@@ -114,67 +166,94 @@ router.post('/login', async (req, res) => {
 
 // POST /api/auth/refresh — rotating refresh token with reuse detection
 router.post('/refresh', async (req, res) => {
-  const { refreshToken } = req.body || {};
+  const body = isPlainObject(req.body) ? req.body : {};
+  const { refreshToken } = body;
 
-  if (!refreshToken || typeof refreshToken !== 'string') {
+  if (typeof refreshToken !== 'string' || !refreshToken) {
     return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'refreshToken is required' } });
   }
 
+  const client = await db.pool.connect();
   try {
-    const found = await db.query(
-      `SELECT id, user_id, family_id, expires_at, revoked_at
-       FROM refresh_tokens WHERE token_hash = $1`,
-      [sha256(refreshToken)]
+    await client.query('BEGIN');
+
+    const hash = sha256(refreshToken);
+
+    // Claim the token atomically: the UPDATE only matches a row that is still
+    // unrevoked and unexpired, so two concurrent refreshes with the same token
+    // cannot both win. Previously the read-then-update was two separate
+    // statements, which let both callers issue a successor and fork the family.
+    const claimed = await client.query(
+      `UPDATE refresh_tokens
+       SET revoked_at = NOW()
+       WHERE token_hash = $1
+         AND revoked_at IS NULL
+         AND expires_at > NOW()
+       RETURNING id, user_id, family_id`,
+      [hash]
     );
 
-    if (found.rowCount === 0) {
+    if (claimed.rowCount === 0) {
+      // Either unknown, already rotated, or expired. Only a genuine REPLAY of
+      // an already-rotated token revokes the family -- a token that simply
+      // aged out is not evidence of theft, and treating it that way logged
+      // honest users out whenever a refresh landed after the 7-day expiry.
+      const existing = await client.query(
+        `SELECT family_id, revoked_at FROM refresh_tokens WHERE token_hash = $1`,
+        [hash]
+      );
+
+      if (existing.rowCount > 0 && existing.rows[0].revoked_at !== null) {
+        await client.query(
+          `UPDATE refresh_tokens SET revoked_at = NOW()
+           WHERE family_id = $1 AND revoked_at IS NULL`,
+          [existing.rows[0].family_id]
+        );
+        await client.query('COMMIT');
+        return res.status(401).json({
+          error: { code: 'TOKEN_REUSE', message: 'Session revoked for safety. Please sign in again.' },
+        });
+      }
+
+      await client.query('ROLLBACK');
       return res.status(401).json({
         error: { code: 'INVALID_REFRESH_TOKEN', message: 'Invalid or expired refresh token' },
       });
     }
 
-    const row = found.rows[0];
-    const active = row.revoked_at === null && new Date(row.expires_at).getTime() > Date.now();
+    const row = claimed.rows[0];
 
-    if (!active) {
-      // Replaying a rotated token is a theft signal: revoke the whole family.
-      await db.query(
-        `UPDATE refresh_tokens SET revoked_at = NOW()
-         WHERE family_id = $1 AND revoked_at IS NULL`,
-        [row.family_id]
-      );
-      return res.status(401).json({
-        error: { code: 'TOKEN_REUSE', message: 'Session revoked for safety. Please sign in again.' },
-      });
-    }
-
-    const user = await db.query('SELECT id, name, email FROM users WHERE id = $1', [row.user_id]);
+    const user = await client.query('SELECT id, name, email FROM users WHERE id = $1', [row.user_id]);
     if (user.rowCount === 0) {
+      await client.query('ROLLBACK');
       return res.status(401).json({
         error: { code: 'INVALID_REFRESH_TOKEN', message: 'User no longer exists' },
       });
     }
 
-    const next = await issueRefreshToken(row.user_id, {
-      userAgent: req.get('user-agent') || '',
-      familyId: row.family_id,
-    });
-
-    await db.query(
-      `UPDATE refresh_tokens SET revoked_at = NOW(), replaced_by = $1 WHERE id = $2`,
-      [sha256(next.raw), row.id]
+    const next = crypto.randomBytes(48).toString('hex');
+    await client.query(
+      `INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at, user_agent, replaced_by)
+       VALUES ($1, $2, $3, NOW() + ($4 || ' days')::interval, $5, $6)`,
+      [row.user_id, sha256(next), row.family_id, String(REFRESH_TTL_DAYS),
+       (req.get('user-agent') || '').slice(0, 200), hash]
     );
+
+    await client.query('COMMIT');
 
     const accessToken = signAccessToken(user.rows[0]);
     return res.json({
       accessToken,
-      refreshToken: next.raw,
+      refreshToken: next,
       expiresIn: ACCESS_TTL_SECONDS,
       user: publicUser(user.rows[0]),
     });
   } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     console.error('Refresh error:', err.message);
     return res.status(500).json({ error: { code: 'SERVER_ERROR', message: 'Refresh failed' } });
+  } finally {
+    client.release();
   }
 });
 
@@ -212,8 +291,14 @@ router.post('/logout-all', requireAuth, async (req, res) => {
   }
 });
 
-/** Bearer-token guard. Kept here so auth routes can reuse it for logout-all. */
-function requireAuth(req, res, next) {
+/**
+ * Bearer-token guard. Kept here so auth routes can reuse it for logout-all.
+ *
+ * Also confirms the account still exists: a JWT stays cryptographically valid
+ * for its full TTL even after the user is deleted, so without this check a
+ * removed user keeps full access until the token ages out.
+ */
+async function requireAuth(req, res, next) {
   const header = req.headers.authorization || '';
   const [scheme, token] = header.split(' ');
 
@@ -223,15 +308,38 @@ function requireAuth(req, res, next) {
     });
   }
 
+  let payload;
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = { id: String(payload.sub), name: payload.name, email: payload.email };
-    return next();
+    // algorithms pinned: without this, a token could select a different family
+    payload = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
   } catch {
     return res.status(401).json({
       error: { code: 'UNAUTHENTICATED', message: 'Invalid or expired token' },
     });
   }
+
+  if (payload.typ !== 'access') {
+    return res.status(401).json({
+      error: { code: 'UNAUTHENTICATED', message: 'Wrong token type' },
+    });
+  }
+
+  try {
+    const user = await db.query('SELECT id FROM users WHERE id = $1', [payload.sub]);
+    if (user.rowCount === 0) {
+      return res.status(401).json({
+        error: { code: 'UNAUTHENTICATED', message: 'Account no longer exists' },
+      });
+    }
+  } catch (err) {
+    console.error('Auth lookup error:', err.message);
+    return res.status(503).json({
+      error: { code: 'SERVICE_UNAVAILABLE', message: 'Please retry shortly' },
+    });
+  }
+
+  req.user = { id: String(payload.sub), name: payload.name, email: payload.email };
+  return next();
 }
 
 module.exports = router;

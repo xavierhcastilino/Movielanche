@@ -1,13 +1,14 @@
 const express = require('express');
 const db = require('../config/db');
+const { qId } = require('../config/validate');
 
 const router = express.Router();
 
 /** GET /api/shows/:id/seats — flat seat grid for the frontend */
 router.get('/:id/seats', async (req, res) => {
-  const { id } = req.params;
+  const id = qId(req.params.id);
 
-  if (!/^\d+$/.test(id)) {
+  if (id === null) {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Show not found' } });
   }
 

@@ -6,7 +6,8 @@ node_modules/
 coverage/
 .agents/
 
-# TEMPORARY API test harness (backend/public/_apitest.html) - not part of the
-# deliverable. Uncomment while testing locally so it never lands in a teammate's
-# clone:
-# backend/public/_apitest.html
+# TEMPORARY local API test harness - a throwaway page for exercising the backend
+# by hand, not part of the deliverable. Ignored outright rather than left to
+# be remembered, so a `git add -A` can never sweep it into a teammate's clone.
+# Remove the file when the testing is done; delete this line to check it in.
+backend/public/_apitest.html

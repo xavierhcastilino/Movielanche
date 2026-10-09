@@ -1,23 +1,40 @@
 -- Movielanche seed data
 --
--- Idempotent: re-running resets the catalogue and rebuilds seats, so a clean
--- clone plus `npm run db:setup` is always demo-ready.
+-- RE-RUNNING IS DESTRUCTIVE. This TRUNCATEs bookings, seats, shows, theatres and
+-- movies. Pointed at the shared Neon database it would erase every real booking.
+--
+-- The npm scripts (db:setup / db:seed) refuse to run without --force, and check
+-- that you are not pointed at a shared host. Running this file by hand is your
+-- own responsibility -- read line 10 before you do.
+--
+-- Re-running RESETS ids, so a rebuild gives a clean, predictable demo state.
+
+DO $$
+BEGIN
+  -- Refuse to wipe a remote database unless the operator explicitly opts in.
+  IF current_setting('movielanche.allow_destructive', true) IS DISTINCT FROM 'yes' THEN
+    RAISE EXCEPTION
+      'Refusing to TRUNCATE: this destroys all bookings, seats and shows. '
+      'Re-run with --force (npm run db:seed -- --force) or set '
+      'movielanche.allow_destructive=yes if you really mean it.';
+  END IF;
+END $$;
 
 TRUNCATE bookings, seats, shows, theatres, movies RESTART IDENTITY CASCADE;
 
 INSERT INTO movies (title, description, genres, language, duration_min, poster_url, rating, release_year, status) VALUES
 ('Inception', 'A thief who steals corporate secrets through dream-sharing is offered a chance to erase his criminal record, if he can plant an idea instead.',
- ARRAY['Sci-Fi','Thriller','Action'], 'English', 148, '/posters/inception.jpg', 8.8, 2010, 'now_showing'),
+ ARRAY['Sci-Fi','Thriller','Action'], 'English', 148, '/posters/inception.png', 8.8, 2010, 'now_showing'),
 ('Interstellar', 'A team of explorers travel through a wormhole in space in an attempt to ensure humanity''s survival.',
- ARRAY['Sci-Fi','Drama','Adventure'], 'English', 169, '/posters/interstellar.jpg', 8.7, 2014, 'now_showing'),
+ ARRAY['Sci-Fi','Drama','Adventure'], 'English', 169, '/posters/interstellar.png', 8.7, 2014, 'now_showing'),
 ('RRR', 'A fictional 1920s story about a fictional kingdom on the brink of collapse, told through the lives of three characters.',
- ARRAY['Action','Drama','Musical'], 'Telugu', 187, '/posters/rrr.jpg', 8.3, 2022, 'now_showing'),
+ ARRAY['Action','Drama','Musical'], 'Telugu', 187, '/posters/rrr.png', 8.3, 2022, 'now_showing'),
 ('Kantara', 'A young man discovers a divine form that can undo the chaos of the modern world.',
- ARRAY['Action','Drama','Fantasy'], 'Kannada', 168, '/posters/kantara.jpg', 8.1, 2022, 'now_showing'),
+ ARRAY['Action','Drama','Fantasy'], 'Kannada', 168, '/posters/kantara.png', 8.1, 2022, 'now_showing'),
 ('Dune: Part Two', 'Paul Atreides unites with the Fremen to wage war against the conspirators who destroyed his family.',
- ARRAY['Sci-Fi','Adventure'], 'English', 166, '/posters/dune2.jpg', 8.5, 2024, 'now_showing'),
-(' Kalki 2898 AD', 'A story set in a future where the world is divided between the privileged and the suppressed.',
- ARRAY['Sci-Fi','Action','Drama'], 'Tamil', 175, '/posters/kalki.jpg', 7.6, 2024, 'coming_soon');
+ ARRAY['Sci-Fi','Adventure'], 'English', 166, '/posters/dune2.png', 8.5, 2024, 'now_showing'),
+('Kalki 2898 AD', 'A story set in a future where the world is divided between the privileged and the suppressed.',
+ ARRAY['Sci-Fi','Action','Drama'], 'Tamil', 175, '/posters/kalki.png', 7.6, 2024, 'coming_soon');
 
 INSERT INTO theatres (name, location) VALUES
 ('PVR Forum', 'Downtown'),
