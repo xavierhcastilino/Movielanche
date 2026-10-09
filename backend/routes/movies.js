@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../config/db');
-const { qString, qId, escapeLike } = require('../config/validate');
+const { qString, qId, escapeLike, isValidDate } = require('../config/validate');
+const { showNotStartedSql } = require('../config/timezone');
 
 const router = express.Router();
 
@@ -87,12 +88,18 @@ router.get('/', async (req, res) => {
     where.push(`title ILIKE $${params.length} ESCAPE '\\'`);
   }
   if (genre) {
+    // genres is an array column, so the filter is an array membership test.
+    // LOWER() on both sides because the stored value is 'Action, Drama' style
+    // text and a case-sensitive match silently returned nothing for 'action'.
     params.push(genre);
-    where.push(`$${params.length} = ANY(genres)`);
+    where.push(`EXISTS (
+      SELECT 1 FROM unnest(genres) g
+      WHERE LOWER(g) = LOWER($${params.length})
+    )`);
   }
   if (language) {
     params.push(language);
-    where.push(`language = $${params.length}`);
+    where.push(`LOWER(language) = LOWER($${params.length})`);
   }
   if (filter) {
     params.push(filter);
@@ -145,9 +152,11 @@ router.get('/near', async (req, res) => {
   if (!location) {
     return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'location is required' } });
   }
-  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+  // A regex alone accepts 2026-13-45 and 2026-02-31, which Postgres rejects at
+  // the DATE cast with 22008 -- a 500 for a client typo.
+  if (!isValidDate(date)) {
     return res.status(400).json({
-      error: { code: 'BAD_REQUEST', message: 'date=YYYY-MM-DD is required' },
+      error: { code: 'BAD_REQUEST', message: 'date must be a real calendar date as YYYY-MM-DD' },
     });
   }
 
@@ -162,7 +171,9 @@ router.get('/near', async (req, res) => {
        FROM shows s
        JOIN theatres t ON t.id = s.theatre_id
        JOIN movies m ON m.id = s.movie_id
-       WHERE t.location ILIKE $1 ESCAPE '\\' AND s.date = $2
+       WHERE t.location ILIKE $1 ESCAPE '\\'
+         AND s.date = $2
+         AND ${showNotStartedSql('s')}
        ORDER BY t.name, s.start_time`,
       [`%${escapeLike(location)}%`, date]
     );
@@ -207,9 +218,11 @@ router.get('/:id/shows', async (req, res) => {
   if (id === null) {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Movie not found' } });
   }
-  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+  // A regex alone accepts 2026-13-45 and 2026-02-31, which Postgres rejects at
+  // the DATE cast with 22008 -- a 500 for a client typo.
+  if (!isValidDate(date)) {
     return res.status(400).json({
-      error: { code: 'BAD_REQUEST', message: 'date=YYYY-MM-DD is required' },
+      error: { code: 'BAD_REQUEST', message: 'date must be a real calendar date as YYYY-MM-DD' },
     });
   }
 
@@ -226,7 +239,9 @@ router.get('/:id/shows', async (req, res) => {
                 WHERE st.show_id = s.id AND st.status = 'available') AS seats_available
        FROM shows s
        JOIN theatres t ON t.id = s.theatre_id
-       WHERE s.movie_id = $1 AND s.date = $2
+       WHERE s.movie_id = $1
+         AND s.date = $2
+         AND ${showNotStartedSql('s')}
        ORDER BY t.name, s.start_time`,
       [id, date]
     );

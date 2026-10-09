@@ -3,6 +3,7 @@ const express = require('express');
 const db = require('../config/db');
 const { requireAuth } = require('./auth');
 const { qId, qString } = require('../config/validate');
+const { showNotStartedSql } = require('../config/timezone');
 
 const router = express.Router();
 
@@ -35,6 +36,7 @@ function toBookingPayload(row) {
     date: row.date == null ? null : String(row.date).slice(0, 10),
     startTime: row.start_time == null ? null : String(row.start_time).slice(0, 5),
     seats: row.seats || [],
+    // NUMERIC arrives as a string, which keeps the cents exact.
     totalAmount: Number(row.total_amount),
     status: row.status,
     createdAt: row.created_at instanceof Date
@@ -115,11 +117,16 @@ router.post('/', requireAuth, async (req, res) => {
   try {
     await client.query('BEGIN');
 
+    // Without this, FOR UPDATE waits for the statement_timeout (15s) while
+    // holding one of only 10 pool connections. A single contested seat could
+    // therefore exhaust the pool and 500 unrelated reads. Fail fast instead.
+    await client.query("SET LOCAL lock_timeout = '2s'");
+
     const show = await client.query(
-      `SELECT id, price, date, start_time
-       FROM shows
+      `SELECT s.id, s.price, s.date, s.start_time
+       FROM shows s
        WHERE id = $1
-         AND (date > CURRENT_DATE OR (date = CURRENT_DATE AND start_time > CURRENT_TIME))`,
+         AND ${showNotStartedSql('s')}`,
       [validShowId]
     );
     if (show.rowCount === 0) {
@@ -138,7 +145,7 @@ router.post('/', requireAuth, async (req, res) => {
        FROM seats
        WHERE show_id = $1 AND seat_number = ANY($2::text[])
        ORDER BY seat_number
-       FOR UPDATE`,
+       FOR UPDATE NOWAIT`,
       [validShowId, seats]
       );
 
@@ -161,24 +168,39 @@ router.post('/', requireAuth, async (req, res) => {
       [req.user.id, validShowId, seats]
     );
 
-    const price = Number(show.rows[0].price);
-    const total = price * seats.length;
+    // Price is NUMERIC and arrives as a STRING ('249.50'). Multiplying a parsed
+    // float by the seat count can drift -- 249.5 * 3 came out as 748.4999999.
+    // Keep the arithmetic in Postgres so the stored total is exact cents.
+    const total = await client.query(
+      `SELECT ROUND($1::numeric * $2, 2) AS total FROM shows WHERE id = $3`,
+      [show.rows[0].price, seats.length, validShowId]
+    );
 
     // booking_code is unique but drawn from a 32-char alphabet, so collisions
     // are only rare -- not impossible (~50% by the birthday bound around 6k
     // bookings). Retry with a fresh code instead of blaming the caller's seats.
     let booking;
     for (let attempt = 0; attempt < 5; attempt++) {
+      // A unique violation aborts the WHOLE transaction, so a plain retry threw
+      // 25P02 'current transaction is aborted' -- the loop was dead code and
+      // the caller got a 500 instead of a fresh code. A savepoint scopes the
+      // rollback to just this statement.
+      await client.query('SAVEPOINT booking_code_attempt');
       try {
         booking = await client.query(
           `INSERT INTO bookings (user_id, show_id, booking_code, seats, total_amount)
            VALUES ($1, $2, $3, $4::text[], $5)
            RETURNING id, booking_code, seats, total_amount, status, created_at`,
-          [req.user.id, validShowId, generateBookingCode(), seats, total]
+          [req.user.id, validShowId, generateBookingCode(), seats, total.rows[0].total]
         );
+        await client.query('RELEASE SAVEPOINT booking_code_attempt');
         break;
       } catch (err) {
-        if (err.code === '23505' && /booking_code/.test(err.constraint || '')) continue;
+        if (err.code === '23505' && /booking_code/.test(err.constraint || '')) {
+          await client.query('ROLLBACK TO SAVEPOINT booking_code_attempt');
+          continue;
+        }
+        await client.query('ROLLBACK TO SAVEPOINT booking_code_attempt').catch(() => {});
         throw err;
       }
     }
@@ -207,6 +229,17 @@ router.post('/', requireAuth, async (req, res) => {
     if (err.code === '23505' && /booking_seats/.test(err.constraint || '')) {
       return res.status(409).json({
         error: { code: 'SEAT_UNAVAILABLE', message: 'One or more seats are already booked' },
+      });
+    }
+    // 55P03 = NOWAIT found the seat locked; 57014 = lock_timeout expired.
+    // Both mean "someone is booking this seat right now" -- a retryable,
+    // expected condition, not a server fault.
+    if (err.code === '55P03' || err.code === '57014') {
+      return res.status(409).json({
+        error: {
+          code: 'SEAT_BUSY',
+          message: 'Those seats are being booked by someone else. Please retry.',
+        },
       });
     }
     // 23503 = the JWT belongs to a user that no longer exists.

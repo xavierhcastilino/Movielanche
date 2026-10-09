@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const express = require('express');
 const db = require('../config/db');
-const { isPlainObject, withinBcryptLimit } = require('../config/validate');
+const { isPlainObject, withinBcryptLimit, MAX_NAME_LENGTH } = require('../config/validate');
 
 const router = express.Router();
 
@@ -12,9 +12,17 @@ const REFRESH_TTL_DAYS = 7;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD_LENGTH = 8;
 const MAX_PASSWORD_LENGTH = 72; // bcrypt silently truncates beyond 72 bytes
-// A dummy hash compared against when no user matches, so an unknown email
-// costs the same wall-clock time as a known one and cannot be enumerated.
-const DUMMY_HASH = '$2b$10$CwTycUXWue0Thq9StjUM0uJ8.r5Fvz6m5tgEMoTi6L0IhRZ0kLwGzq';
+// A real bcrypt hash compared against when no user matches, so an unknown
+// email costs the same wall-clock time as a known one and cannot be enumerated.
+//
+// It must be GENERATED, not hand-written. The previous hand-written constant was
+// 61 characters with an invalid digest, so bcrypt.compare() bailed out before
+// hashing: an unknown email answered in 0.7ms against 76ms for a known one --
+// the exact enumeration signal the comparison was meant to remove.
+const DUMMY_HASH = bcrypt.hashSync('movielanche-timing-equaliser', 10);
+
+/** How long an already-rotated token may be replayed before it counts as theft. */
+const REFRESH_REUSE_GRACE_SECONDS = 30;
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -61,6 +69,14 @@ router.post('/register', async (req, res) => {
   if (typeof name !== 'string' || !name.trim()) {
     return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'name is required' } });
   }
+  // name is embedded in the access token, so an unbounded value produced a
+  // ~7KB token and would eventually breach the 16KB HTTP header limit,
+  // locking that account out of every request.
+  if (name.trim().length > MAX_NAME_LENGTH) {
+    return res.status(400).json({
+      error: { code: 'BAD_REQUEST', message: `name must be at most ${MAX_NAME_LENGTH} characters` },
+    });
+  }
   if (typeof email !== 'string' || !EMAIL_RE.test(email)) {
     return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'A valid email is required' } });
   }
@@ -77,6 +93,11 @@ router.post('/register', async (req, res) => {
     });
   }
 
+  // Hash first, then take a connection. bcrypt blocks for ~76ms of pure CPU;
+  // doing it while holding one of 10 pool slots made registration a cheap way
+  // to starve every other request.
+  const passwordHash = await bcrypt.hash(password, 10);
+
   const client = await db.pool.connect();
   try {
     // The user row and its first refresh token are written together. Previously
@@ -84,7 +105,6 @@ router.post('/register', async (req, res) => {
     // credentials for, and the retry then failed with 409 EMAIL_TAKEN.
     await client.query('BEGIN');
 
-    const passwordHash = await bcrypt.hash(password, 10);
     const inserted = await client.query(
       `INSERT INTO users (name, email, password_hash)
        VALUES ($1, $2, $3)
@@ -204,14 +224,39 @@ router.post('/refresh', async (req, res) => {
       );
 
       if (existing.rowCount > 0 && existing.rows[0].revoked_at !== null) {
-        await client.query(
-          `UPDATE refresh_tokens SET revoked_at = NOW()
-           WHERE family_id = $1 AND revoked_at IS NULL`,
-          [existing.rows[0].family_id]
-        );
-        await client.query('COMMIT');
+        // Grace window: a client whose response was lost retries with the token
+        // it just spent, and two browser tabs refreshing at once race each
+        // other. Neither is theft, and revoking the family on those punished
+        // the legitimate holder -- it killed the NEW token too, so a single
+        // dropped packet logged the user out. Only a replay that lands well
+        // after rotation is treated as compromise.
+        const revokedAt = new Date(existing.rows[0].revoked_at).getTime();
+        const withinGrace = Date.now() - revokedAt < REFRESH_REUSE_GRACE_SECONDS * 1000;
+
+        if (!withinGrace) {
+          await client.query(
+            `UPDATE refresh_tokens SET revoked_at = NOW()
+             WHERE family_id = $1 AND revoked_at IS NULL`,
+            [existing.rows[0].family_id]
+          );
+          await client.query('COMMIT');
+          return res.status(401).json({
+            error: { code: 'TOKEN_REUSE', message: 'Session revoked for safety. Please sign in again.' },
+          });
+        }
+
+        // Inside the grace window: do NOT revoke the family. The successor the
+        // client legitimately holds stays usable, so a dropped response costs
+        // one re-login instead of killing a live session. (The successor's raw
+        // token cannot be returned here -- only its hash is stored -- so the
+        // client must sign in again; what matters is that the NEW token in the
+        // client's possession is not collateral damage.)
+        await client.query('ROLLBACK');
         return res.status(401).json({
-          error: { code: 'TOKEN_REUSE', message: 'Session revoked for safety. Please sign in again.' },
+          error: {
+            code: 'TOKEN_REUSE_GRACE',
+            message: 'This refresh token was already rotated. Sign in again to continue.',
+          },
         });
       }
 
@@ -232,21 +277,27 @@ router.post('/refresh', async (req, res) => {
     }
 
     const next = crypto.randomBytes(48).toString('hex');
+    const nextHash = sha256(next);
+    // replaced_by records the token's own hash, i.e. 'this row was spent and
+    // superseded', which is what the grace-window lookup keys off. Storing the
+    // PARENT's hash here (as this previously did) pointed the column at the
+    // token that replaced us instead.
     await client.query(
       `INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at, user_agent, replaced_by)
        VALUES ($1, $2, $3, NOW() + ($4 || ' days')::interval, $5, $6)`,
-      [row.user_id, sha256(next), row.family_id, String(REFRESH_TTL_DAYS),
-       (req.get('user-agent') || '').slice(0, 200), hash]
+      [row.user_id, nextHash, row.family_id, String(REFRESH_TTL_DAYS),
+       (req.get('user-agent') || '').slice(0, 200), nextHash]
     );
 
     await client.query('COMMIT');
 
     const accessToken = signAccessToken(user.rows[0]);
     return res.json({
-      accessToken,
+      accessToken: accessToken,
       refreshToken: next,
       expiresIn: ACCESS_TTL_SECONDS,
       user: publicUser(user.rows[0]),
+      token: accessToken,
     });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
@@ -300,9 +351,10 @@ router.post('/logout-all', requireAuth, async (req, res) => {
  */
 async function requireAuth(req, res, next) {
   const header = req.headers.authorization || '';
-  const [scheme, token] = header.split(' ');
+  const [scheme, token] = header.trim().split(/\s+/);
 
-  if (scheme !== 'Bearer' || !token) {
+  // RFC 7235: the auth scheme is case-insensitive, so 'bearer x' is valid.
+  if (!token || !scheme || scheme.toLowerCase() !== 'bearer') {
     return res.status(401).json({
       error: { code: 'UNAUTHENTICATED', message: 'Missing or malformed Authorization header' },
     });

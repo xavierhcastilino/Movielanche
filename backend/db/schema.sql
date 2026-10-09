@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS seats (
 
 CREATE INDEX IF NOT EXISTS seats_show_status_idx ON seats (show_id, status);
 
+
 CREATE TABLE IF NOT EXISTS bookings (
   id           SERIAL PRIMARY KEY,
   user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -113,3 +114,28 @@ CREATE TABLE IF NOT EXISTS booking_seats (
 );
 
 CREATE INDEX IF NOT EXISTS booking_seats_booking_idx ON booking_seats (booking_id);
+
+-- Deleting a user cascades their bookings, and seats.booked_by is ON DELETE SET
+-- NULL -- which left seats stuck at status='booked' with nobody owning them,
+-- permanently shrinking the capacity of every show they belonged to.
+--
+-- Declared last because it reads booking_seats, which must exist first. It is
+-- a FOR EACH STATEMENT trigger, so the function body is only parsed at fire
+-- time, not at creation.
+CREATE OR REPLACE FUNCTION release_seats_for_deleted_bookings() RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE seats st
+     SET status = 'available', booked_by = NULL
+   WHERE st.status = 'booked'
+     AND NOT EXISTS (
+       SELECT 1 FROM booking_seats bs
+       WHERE bs.show_id = st.show_id AND bs.seat_number = st.seat_number
+     );
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS bookings_release_seats ON bookings;
+CREATE TRIGGER bookings_release_seats
+  AFTER DELETE ON bookings
+  FOR EACH STATEMENT EXECUTE FUNCTION release_seats_for_deleted_bookings();

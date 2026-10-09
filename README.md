@@ -114,10 +114,21 @@ Unknown locations return an empty list rather than a 404.
 | GET | `/api/bookings/:id` | 404 unless it belongs to you |
 
 Max 6 seats per booking. Seats must be `A1`–`E8`, no duplicates.
-409 `SEAT_UNAVAILABLE` if any seat is already taken. 404 `SHOW_UNAVAILABLE` if
-the show has already started — the time comparison happens in SQL, and the
-response deliberately does not distinguish "missing" from "past" so it cannot be
-used to probe which show ids exist.
+
+- `409 SEAT_UNAVAILABLE` — a seat is already booked
+- `409 SEAT_BUSY` — someone else is booking that seat right now (the lock is
+  taken with `NOWAIT` + a 2s `lock_timeout`, so a contested seat fails fast
+  instead of pinning a pool connection)
+- `404 SHOW_UNAVAILABLE` — the show has already started. "Has it started?" is
+  evaluated in **IST** (`CINEMA_TZ`), not the database server's timezone —
+  hosted Postgres runs UTC, which made the check 5h30m too lenient. The response
+  deliberately does not distinguish "missing" from "past", so it cannot be used
+  to probe which show ids exist.
+
+The booking-code collision retry runs inside a `SAVEPOINT`: a unique violation
+aborts the enclosing transaction, so a plain retry died with
+`25P02 current transaction is aborted` and the caller saw a 500. Totals are
+computed in SQL to keep the cents exact.
 
 **How double-booking is prevented:** the whole claim runs in one
 transaction that takes a `SELECT … FOR UPDATE` row lock on exactly the
@@ -144,10 +155,11 @@ out explicitly rather than globally. Never commit `.env`.
 
 | Variable | Purpose |
 |---|---|
-| `JWT_SECRET` | **Required.** Startup fails fast if missing, and in production if it is still the example value. |
+| `JWT_SECRET` | **Required**, minimum 32 characters — the server refuses to boot otherwise. Generate with `openssl rand -hex 32`. |
+| `CINEMA_TZ` | The cinema's IANA timezone (default `Asia/Kolkata`). Show times are local wall-clock, so this decides when a show is considered started. |
+| `RATE_LIMIT_MAX` | **Multiplier** on the built-in ceilings (auth 40/15min, bookings 60/min, API 300/min). `0` disables limiting. |
 | `PORT` | Defaults to `5000`. |
 | `NODE_ENV` | `production` hides error detail from responses; `test` disables rate limiting. |
-| `RATE_LIMIT_MAX` | Requests per window. `0` disables limiting (load testing only). |
 | `TRUST_PROXY` | Set to the number of proxy hops, or every caller shares one rate-limit bucket. |
 | `CORS_ORIGIN` | Defaults to `*`. Lock this down before deploying. |
 | `DB_SSL_REJECT_UNAUTHORIZED` | `false` opts out of TLS verification for a self-signed provider. |
@@ -163,14 +175,28 @@ npm run test:api   # terminal 2 -- live API regression suite
 ```
 
 `test:api` covers the failure modes that are easy to break silently: the
-concurrent seat race, refresh-token rotation (including 5 simultaneous refreshes
-of one token), ownership checks, date correctness east of UTC, and the
-input-validation cases that previously returned HTML stack traces.
+concurrent seat race, refresh-token rotation (5 simultaneous refreshes of one
+token, plus both sides of the reuse grace window), ownership checks, the
+IST booking cutoff, seat ordering past `A9`, and the input-validation cases
+that previously returned HTML stack traces.
 
 Run the server with `NODE_ENV=test` when using the API suite — it registers many
 users in quick succession and would otherwise hit the auth rate limit.
 
+## Behind a reverse proxy
+
+`TRUST_PROXY` defaults to **1 hop**. Express derives the client IP from
+`X-Forwarded-For` only when told to; with it off, every caller shares one rate
+limit bucket, so on a campus NAT ~40 users lock each other out. Raise the value
+for deeper proxy chains. `CORS_ORIGIN` defaults to `*` — lock it down before
+deploying.
+
+`GET /api/health` runs `SELECT 1` and returns **503** when the database is
+unreachable, so a load balancer stops routing to a broken instance.
+
 ## Still to do
+
+- **Idempotency keys** — a retry after a timeout reports the seats as taken
 
 - **Seat holds / cancel endpoint** — seats cannot currently be released once booked
 - **Real poster artwork** (the committed ones are generated placeholders)

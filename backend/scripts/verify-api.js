@@ -62,6 +62,69 @@ async function aShow(minFree = 4) {
   throw new Error('no show with enough free seats');
 }
 
+const { Client } = require('pg');
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
+
+/**
+ * Creates a throwaway show at a specific local start time, so the suite can test
+ * the "has this started?" boundary directly instead of hoping the seed happens
+ * to contain such a show. Returns null if it cannot connect.
+ */
+async function aProbeShow(screen, startTime, seatsPerRow = 8) {
+  const client = new Client({
+    user: process.env.DB_USER, password: process.env.DB_PASSWORD,
+    host: process.env.DB_HOST || 'localhost',
+    database: process.env.DB_NAME || 'movielanche',
+    port: parseInt(process.env.DB_PORT || '5432', 10),
+  });
+  try {
+    await client.connect();
+    await client.query('DELETE FROM shows WHERE screen = $1', [screen]);
+    const show = await client.query(
+      `INSERT INTO shows (movie_id, theatre_id, date, start_time, screen, price)
+       SELECT m.id, t.id, (NOW() AT TIME ZONE 'Asia/Kolkata')::date, $2, $1, 200
+       FROM movies m CROSS JOIN (SELECT id FROM theatres LIMIT 1) t
+       WHERE m.title = 'Inception' RETURNING id, movie_id,
+         to_char((NOW() AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD') AS date`,
+      [screen, startTime]
+    );
+    if (show.rowCount === 0) return null;
+    const showId = show.rows[0].id;
+    // Wider rows than the seeded A1-E8, so 'A10'/'A12' exist and text sorting
+    // would visibly break.
+    for (const r of ['A', 'B']) {
+      await client.query(
+        `INSERT INTO seats (show_id, seat_number, status)
+         SELECT $1, $2 || g, 'available' FROM generate_series(1, $3) g`,
+        [showId, r, seatsPerRow]
+      );
+    }
+    return { showId: showId, movieId: show.rows[0].movie_id, date: show.rows[0].date };
+  } catch (err) {
+    console.error('  (probe setup skipped:', err.message + ')');
+    return null;
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+async function dropProbeShow(screen) {
+  const client = new Client({
+    user: process.env.DB_USER, password: process.env.DB_PASSWORD,
+    host: process.env.DB_HOST || 'localhost',
+    database: process.env.DB_NAME || 'movielanche',
+    port: parseInt(process.env.DB_PORT || '5432', 10),
+  });
+  try {
+    await client.connect();
+    // Cascades release the seats and booking_seats rows.
+    await client.query('DELETE FROM shows WHERE screen = $1', [screen]);
+  } catch { /* best effort */ } finally {
+    await client.end().catch(() => {});
+  }
+}
+
 (async () => {
   console.log('='.repeat(74));
   console.log('CATALOG');
@@ -151,11 +214,26 @@ async function aShow(minFree = 4) {
   const rot = await call('POST', '/api/auth/refresh', { refreshToken: alice.refresh });
   check('refresh -> 200', rot.status === 200, rot.status);
   check('  token rotated', rot.data.refreshToken !== alice.refresh);
+  // An immediate retry with the just-spent token is the LOST-RESPONSE case (or a
+  // second tab racing), not theft. It gets a distinct code and must NOT destroy
+  // the successor the client legitimately holds -- that was logging users out
+  // over a single dropped packet.
   const replay = await call('POST', '/api/auth/refresh', { refreshToken: alice.refresh });
-  check('replay -> 401 TOKEN_REUSE', replay.status === 401 && replay.data.error?.code === 'TOKEN_REUSE',
-    replay.data.error?.code);
+  check('replay within grace -> TOKEN_REUSE_GRACE',
+    replay.status === 401 && replay.data.error?.code === 'TOKEN_REUSE_GRACE', replay.data.error?.code);
   const after = await call('POST', '/api/auth/refresh', { refreshToken: rot.data.refreshToken });
-  check('successor also revoked', after.status === 401, after.status);
+  check('successor survives the grace-window retry', after.status === 200, after.status);
+  check('  refresh returns the documented token alias', 'token' in after.data);
+
+  // --- regression: past the grace window, a replay IS treated as theft
+  const thief = await register('thief');
+  const t1 = await call('POST', '/api/auth/refresh', { refreshToken: thief.refresh });
+  await call('POST', `/_test/age-family/${Buffer.from(thief.refresh).toString('hex')}`);
+  const aged = await call('POST', '/api/auth/refresh', { refreshToken: thief.refresh });
+  check('replay after the grace window -> TOKEN_REUSE (family revoked)',
+    aged.data?.error?.code === 'TOKEN_REUSE', aged.data?.error?.code);
+  const dead = await call('POST', '/api/auth/refresh', { refreshToken: t1.data.refreshToken });
+  check('  and the successor is revoked with the family', dead.status === 401, dead.status);
 
   // --- regression: concurrent refresh must not fork the family
   const racer = await register('racer');
@@ -172,6 +250,37 @@ async function aShow(minFree = 4) {
   console.log('='.repeat(74));
 
   const bob = await register('bob');
+  const firstMovie = (await call('GET', '/api/movies')).data.data[0];
+
+  // --- regression: invalid-but-well-formed dates used to reach the DATE cast
+  // and 500. A regex alone accepts 2026-13-45 and 2026-02-31.
+  for (const bad of ['2026-13-45', '2026-02-31', '0000-00-00', '2026-00-10']) {
+    const r = await call('GET', `/api/movies/${firstMovie.id}/shows?date=${bad}`);
+    check(`?date=${bad} -> 400 not 500`, r.status === 400, r.status);
+  }
+  // --- regression: genre/language filters were case-sensitive
+  const langLower = await call('GET', '/api/movies?language=english');
+  const langExact = await call('GET', '/api/movies?language=English');
+  check('language filter is case-insensitive',
+    langLower.data.count === langExact.data.count && langExact.data.count > 0,
+    `lower=${langLower.data.count} exact=${langExact.data.count}`);
+
+  // --- regression: health must actually query the database
+  const health = await call('GET', '/api/health');
+  check('health reports database connectivity',
+    health.status === 200 && health.data.database === 'connected', health.status);
+
+  // --- regression: bearer scheme is case-insensitive (RFC 7235)
+  const lowerScheme = await fetch(BASE + '/api/bookings/me', {
+    headers: { Authorization: `bearer ${bob.access}` },
+  });
+  check('lowercase "bearer" scheme accepted', lowerScheme.status === 200, lowerScheme.status);
+
+  // --- regression: an unbounded name produced a ~7KB JWT header
+  const hugeName = await call('POST', '/api/auth/register',
+    { name: 'A'.repeat(5000), email: `huge${uuid()}@example.com`, password: 'secret123' });
+  check('5000-char name -> 400', hugeName.status === 400, hugeName.status);
+
   // 6 free seats: 2 consumed by the numeric/string id regression below, 2 for the main booking.
   const show = await aShow(6);
   const pick = show.free.slice(4, 6).map((s) => s.seatNumber);
@@ -263,6 +372,58 @@ async function aShow(minFree = 4) {
     mine.data.every((b) => b.movie && b.theatre && b.date), mine.data[0]?.bookingCode);
   const minePaged = await call('GET', '/api/bookings/me?limit=1', undefined, bob.access);
   check('  limit honoured', minePaged.data.length <= 1, minePaged.data.length);
+
+  // --- regression: the booking cutoff was compared against the DATABASE clock
+  // (hosted Postgres runs UTC) while show times are IST wall-clock. At 21:14 IST
+  // the DB read 15:44, so a 20:00 show passed as "not yet started" and returned
+  // 201. Build the boundary from IST and assert the API agrees.
+  const pad = (n) => String(n).padStart(2, '0');
+  const ist = new Date(Date.now() + 5.5 * 3600 * 1000);
+  const istHHMM = `${pad(ist.getUTCHours())}:${pad(ist.getUTCMinutes())}`;
+  const probe = await aProbeShow('TZ Regression', istHHMM, 8);
+  if (probe) {
+    const attempt = await call('POST', '/api/bookings',
+      { showId: probe.showId, seats: ['A1'] }, bob.access);
+    check('a show starting exactly now is NOT bookable', attempt.status !== 201, attempt.status);
+
+    const listed = await call('GET', `/api/movies/${probe.movieId}/shows?date=${probe.date}`);
+    const rows = listed.data.data || [];
+    const leaked = rows.filter((r) => String(r.startTime || '') <= istHHMM);
+    check('listing hides shows that already started', leaked.length === 0,
+      `${leaked.length} of ${rows.length} leaked`);
+
+    const grid = await call('GET', `/api/shows/${probe.showId}/seats`);
+    check('seat grid marks a started show unbookable', grid.data.bookable === false,
+      `bookable=${grid.data.bookable}`);
+    check('seat grid carries show metadata',
+      !!grid.data.movie && !!grid.data.theatre && !!grid.data.date && !!grid.data.timezone,
+      JSON.stringify({ m: !!grid.data.movie, t: !!grid.data.theatre, tz: grid.data.timezone }));
+    await dropProbeShow('TZ Regression');
+  } else {
+    check('timezone probe show created', false, 'setup failed');
+  }
+
+  // --- regression: seat numbers sorted as TEXT, so 'A10' came before 'A2'.
+  const wide = await aProbeShow('Wide Row', '23:59', 12);
+  if (wide) {
+    const g = await call('GET', `/api/shows/${wide.showId}/seats`);
+    const order = g.data.seats.map((s) => s.seatNumber);
+    // Group by row letter, then require each row's numbers to ascend. Sorting
+    // the flat list as text put 'A10' before 'A2'.
+    const byRow = new Map();
+    for (const sn of order) {
+      const row = sn.replace(/[0-9]/g, '');
+      if (!byRow.has(row)) byRow.set(row, []);
+      byRow.get(row).push(Number(sn.replace(/[^0-9]/g, '')));
+    }
+    const rows = [...byRow.values()];
+    const sorted = rows.every((r) => r.every((v, i) => i === 0 || r[i - 1] < v));
+    // The decisive case is index 9: text order gives 'A10' immediately after
+    // 'A1'; numeric order must give it after 'A9'.
+    const ok = sorted && order[9] === 'A10' && order[8] === 'A9';
+    check('seat numbers sort numerically, not as text', ok, order.slice(0, 12).join(','));
+    await dropProbeShow('Wide Row');
+  }
 
   console.log();
   console.log('='.repeat(74));

@@ -11,6 +11,9 @@
 const INT_MIN = 1;
 const INT_MAX = 2147483647;
 
+/** Name lands in the JWT header, so it has to stay small enough to sign. */
+const MAX_NAME_LENGTH = 100;
+
 /**
  * Reads a query value as a trimmed string.
  * Arrays take their first element, objects/anything else return null.
@@ -36,7 +39,7 @@ function qId(value) {
   let raw;
   if (typeof value === 'string') raw = value.trim();
   else if (typeof value === 'number' && Number.isFinite(value)) raw = String(value);
-  else if (Array.isArray(value)) raw = typeof value[0] === 'string' ? value[0].trim() : null;
+  else if (Array.isArray(value)) return qId(value[0]);
   else return null;
 
   if (raw === null || !/^\d+$/.test(raw)) return null;
@@ -63,4 +66,31 @@ function withinBcryptLimit(value) {
   return Buffer.byteLength(value, 'utf8') <= 72;
 }
 
-module.exports = { qString, qId, escapeLike, isPlainObject, withinBcryptLimit, INT_MAX };
+/**
+ * Validates a calendar date that must be REAL, not merely well shaped.
+ *
+ * `/^\d{4}-\d{2}-\d{2}$/` happily accepts 2026-13-45 and 2026-02-31, which then
+ * reach Postgres as a DATE cast and raise 22008 -> a 500. This rejects anything
+ * the Date constructor would roll over (2026-02-31 becoming 3 March).
+ */
+function isValidDate(value) {
+  if (typeof value !== 'string') return false;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!m) return false;
+  const [, y, mo, d] = m.map(Number);
+  if (mo < 1 || mo > 12 || d < 1) return false;
+  // Day 0 of the next month is the last day of this one.
+  if (d > new Date(Date.UTC(y, mo, 0)).getUTCDate()) return false;
+  return true;
+}
+
+module.exports = {
+  qString,
+  qId,
+  escapeLike,
+  isPlainObject,
+  withinBcryptLimit,
+  isValidDate,
+  MAX_NAME_LENGTH,
+  INT_MAX,
+};
