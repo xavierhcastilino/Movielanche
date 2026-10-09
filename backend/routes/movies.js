@@ -1,7 +1,7 @@
 const express = require('express');
 const db = require('../config/db');
 const { qString, qId, escapeLike, isValidDate } = require('../config/validate');
-const { showNotStartedSql } = require('../config/timezone');
+const { showNotStartedSql, cinemaTimeZone } = require('../config/timezone');
 
 const router = express.Router();
 
@@ -289,10 +289,15 @@ router.get('/:id', async (req, res) => {
     }
 
     // Distinct upcoming show dates power the date picker.
+    //
+    // Must use the same IST cutoff as booking, not CURRENT_DATE: with the
+    // database in UTC this offered today at 21:30 IST when every show had
+    // already started, so the picker showed a day that then returned nothing.
     const dates = await db.query(
       `SELECT DISTINCT date
-       FROM shows
-       WHERE movie_id = $1 AND date >= CURRENT_DATE
+       FROM shows s
+       WHERE s.movie_id = $1
+         AND ${showNotStartedSql('s')}
        ORDER BY date`,
       [id]
     );
@@ -300,6 +305,8 @@ router.get('/:id', async (req, res) => {
     return res.json({
       ...toCard(movie.rows[0]),
       showDates: dates.rows.map((r) => toDateString(r.date)),
+      // So the UI can label times as IST rather than guessing.
+      timezone: cinemaTimeZone(),
     });
   } catch (err) {
     console.error(`Error fetching movie ${id}:`, err.message);
