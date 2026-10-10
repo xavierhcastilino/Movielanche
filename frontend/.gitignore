@@ -1,0 +1,102 @@
+# ==========================================
+# Dependencies
+# ==========================================
+node_modules/
+.pnp/
+.pnp.cjs
+
+# ==========================================
+# Build output
+# ==========================================
+dist/
+build/
+out/
+coverage/
+
+# ==========================================
+# Environment variables and secrets
+# ==========================================
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# ==========================================
+# Logs
+# ==========================================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ==========================================
+# Vite
+# ==========================================
+.vite/
+vite.config.*.timestamp-*
+
+# ==========================================
+# Cache and temporary files
+# ==========================================
+.cache/
+.temp/
+.tmp/
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# ==========================================
+# Operating system files
+# ==========================================
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ==========================================
+# Editors and IDEs
+# ==========================================
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# ==========================================
+# Testing
+# ==========================================
+.nyc_output/
+playwright-report/
+test-results/
+cypress/videos/
+cypress/screenshots/
+
+# ==========================================
+# Local databases and runtime files
+# ==========================================
+*.sqlite
+*.sqlite3
+*.db
+*.pid
+*.seed
+
+# ==========================================
+# Deployment
+# ==========================================
+.vercel/
+.netlify/
+
+# ==========================================
+# Optional local tooling
+# ==========================================
+.eslintcache
+.stylelintcache
+*.tsbuildinfo
