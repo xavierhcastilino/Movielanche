@@ -1,4 +1,5 @@
-export type PaymentMethod = 'UPI' | 'Card' | 'Net Banking';
+export type PaymentMethod = 'UPI';
+type StoredPaymentMethod = PaymentMethod | 'Card' | 'Net Banking';
 export type SeatState = 'available' | 'selected' | 'occupied';
 
 export interface BookingDraft {
@@ -45,6 +46,6 @@ export interface Booking {
   contactName: string;
   contactEmail: string;
   contactPhone: string;
-  paymentMethod: PaymentMethod;
+  paymentMethod: StoredPaymentMethod;
   createdAt: string;
 }

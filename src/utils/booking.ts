@@ -27,11 +27,13 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
-function isValidPaymentMethod(value: unknown): value is Booking['paymentMethod'] {
+type StoredBookingDraft = Omit<BookingDraft, 'paymentMethod'> & { paymentMethod?: Booking['paymentMethod'] };
+
+function isValidStoredPaymentMethod(value: unknown): value is Booking['paymentMethod'] {
   return value === 'UPI' || value === 'Card' || value === 'Net Banking';
 }
 
-function isBookingDraft(value: unknown): value is BookingDraft {
+function isBookingDraft(value: unknown): value is StoredBookingDraft {
   if (!isRecord(value)) return false;
   return hasTextFields(value, ['movieId', 'showId', 'theatreId', 'theatreName', 'theatreArea', 'city', 'distance', 'dateISO', 'dateLabel', 'time', 'format', 'screen'])
     && typeof value.ticketPrice === 'number' && Number.isFinite(value.ticketPrice) && value.ticketPrice >= 0
@@ -39,7 +41,7 @@ function isBookingDraft(value: unknown): value is BookingDraft {
     && (value.contactName === undefined || typeof value.contactName === 'string')
     && (value.contactEmail === undefined || typeof value.contactEmail === 'string')
     && (value.contactPhone === undefined || typeof value.contactPhone === 'string')
-    && (value.paymentMethod === undefined || isValidPaymentMethod(value.paymentMethod));
+    && (value.paymentMethod === undefined || isValidStoredPaymentMethod(value.paymentMethod));
 }
 
 function isBooking(value: unknown): value is Booking {
@@ -49,12 +51,13 @@ function isBooking(value: unknown): value is Booking {
     && typeof value.subtotal === 'number' && Number.isFinite(value.subtotal)
     && typeof value.convenienceFee === 'number' && Number.isFinite(value.convenienceFee)
     && typeof value.total === 'number' && Number.isFinite(value.total)
-    && isValidPaymentMethod(value.paymentMethod);
+    && isValidStoredPaymentMethod(value.paymentMethod);
 }
 
 export function getBookingDraft(): BookingDraft | null {
   const value = readJSON<unknown>(DRAFT_KEY, null);
-  return isBookingDraft(value) ? value : null;
+  if (!isBookingDraft(value)) return null;
+  return { ...value, paymentMethod: 'UPI' };
 }
 
 export function saveBookingDraft(draft: BookingDraft): void {

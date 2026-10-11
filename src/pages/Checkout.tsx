@@ -1,19 +1,12 @@
 import { useState, type FormEvent } from 'react';
-import { ArrowLeft, Check, CreditCard, Smartphone, WalletCards } from 'lucide-react';
+import { ArrowLeft, Check, Smartphone } from 'lucide-react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { BookingSummary } from '../components/BookingSummary';
 import { EmptyState } from '../components/EmptyState';
 import { ImageWithFallback } from '../components/ImageWithFallback';
 import { movies } from '../data/movies';
-import { createBooking } from '../services/api';
-import type { BookingDraft, PaymentMethod } from '../types/booking';
-import { clearBookingDraft, getBookingDraft } from '../utils/booking';
-
-const paymentOptions: Array<{ value: PaymentMethod; icon: typeof Smartphone; note: string }> = [
-  { value: 'UPI', icon: Smartphone, note: 'Demo option' },
-  { value: 'Card', icon: CreditCard, note: 'Demo option' },
-  { value: 'Net Banking', icon: WalletCards, note: 'Demo option' },
-];
+import type { BookingDraft } from '../types/booking';
+import { getBookingDraft } from '../utils/booking';
 
 export function Checkout() {
   const navigate = useNavigate();
@@ -21,9 +14,6 @@ export function Checkout() {
   const [name, setName] = useState(draft?.contactName ?? '');
   const [email, setEmail] = useState(draft?.contactEmail ?? '');
   const [phone, setPhone] = useState(draft?.contactPhone ?? '');
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(draft?.paymentMethod ?? 'UPI');
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState('');
 
   if (!draft || draft.seats.length === 0) return <Navigate to={draft ? `/seats/${draft.showId}` : '/movies'} replace />;
   const movie = movies.find((item) => item.id === draft.movieId);
@@ -35,19 +25,9 @@ export function Checkout() {
     try { localStorage.setItem('movielanche:booking-draft', JSON.stringify(next)); } catch { /* Continue with the current in-memory draft. */ }
   };
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setError('');
-    setSubmitting(true);
-    try {
-      const booking = await createBooking({ ...draft, contactName: name.trim(), contactEmail: email.trim(), contactPhone: phone.trim(), paymentMethod });
-      clearBookingDraft();
-      navigate('/booking-confirmation', { state: { booking, revealTicket: true } });
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'The demo booking could not be created. Please try again.');
-    } finally {
-      setSubmitting(false);
-    }
+    navigate('/payment');
   };
 
   return (
@@ -69,13 +49,16 @@ export function Checkout() {
             </div>
           </section>
           <section className="checkout-section">
-            <div className="checkout-section__heading"><span className="step-index">02</span><div><h2>Choose a demo method</h2><p>No money will be collected or payment processed.</p></div></div>
+            <div className="checkout-section__heading"><span className="step-index">02</span><div><h2>Payment method</h2><p>UPI is the only option. No money is processed in this demo.</p></div></div>
             <div className="payment-options">
-              {paymentOptions.map(({ value, icon: Icon, note }) => <label className={paymentMethod === value ? 'payment-option is-selected' : 'payment-option'} key={value}><input type="radio" name="paymentMethod" value={value} checked={paymentMethod === value} onChange={() => { setPaymentMethod(value); updateDraft({ paymentMethod: value }); }} /><Icon size={19} aria-hidden="true" /><span><strong>{value}</strong><small>{note}</small></span>{paymentMethod === value && <Check size={16} className="payment-option__check" aria-hidden="true" />}</label>)}
+              <div className="payment-option is-selected">
+                <Smartphone size={19} aria-hidden="true" />
+                <span><strong>UPI</strong><small>Demo option</small></span>
+                <Check size={16} className="payment-option__check" aria-hidden="true" />
+              </div>
             </div>
           </section>
-          {error && <p className="form-message" role="alert">{error}</p>}
-          <div className="checkout-actions"><p>Prototype only · this does not reserve seats at a real cinema.</p><button className="button button--primary" type="submit" disabled={submitting}>{submitting ? 'Creating ticket…' : 'Confirm demo booking'} <Check size={16} /></button></div>
+          <div className="checkout-actions"><p>Prototype only · this does not reserve seats at a real cinema.</p><button className="button button--primary" type="submit">Confirm Booking <Check size={16} /></button></div>
         </div>
         <BookingSummary movieTitle={movie.title} theatreName={draft.theatreName} theatreArea={draft.theatreArea} date={draft.dateLabel} time={draft.time} format={draft.format} seats={draft.seats} ticketPrice={draft.ticketPrice} />
       </form>

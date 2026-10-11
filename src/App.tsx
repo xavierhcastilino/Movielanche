@@ -14,6 +14,7 @@ import { Movies } from './pages/Movies';
 import { MyBookings } from './pages/MyBookings';
 import { NearbyTheatres } from './pages/NearbyTheatres';
 import { NotFound } from './pages/NotFound';
+import { Payment } from './pages/Payment';
 import { Profile } from './pages/Profile';
 import { SeatSelection } from './pages/SeatSelection';
 import { ShowSelection } from './pages/ShowSelection';
@@ -42,6 +43,7 @@ export default function App() {
             <Route path="/shows/:movieId" element={<ShowSelection />} />
             <Route path="/seats/:showId" element={<SeatSelection />} />
             <Route path="/checkout" element={<Checkout />} />
+            <Route path="/payment" element={<Payment />} />
             <Route path="/booking-confirmation" element={<BookingConfirmation />} />
             <Route path="/bookings" element={<MyBookings />} />
             <Route path="/profile" element={<Profile />} />
