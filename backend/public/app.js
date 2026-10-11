@@ -9,7 +9,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnBob = document.getElementById('switch-user-bob');
   const userNav = document.getElementById('user-nav');
   const openLoginBtn = document.getElementById('open-login-btn');
-  const openSignupBtn = document.getElementById('open-signup-btn');
 
   // Banners & Notifications
   const timeoutBanner = document.getElementById('timeout-banner');
@@ -60,12 +59,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Auth Modal Elements
   const authModal = document.getElementById('auth-modal');
   const closeAuthBtn = document.getElementById('close-auth-btn');
-  const tabLogin = document.getElementById('tab-login');
-  const tabSignup = document.getElementById('tab-signup');
-  const loginForm = document.getElementById('login-form');
-  const signupForm = document.getElementById('signup-form');
   const authAlert = document.getElementById('auth-alert');
-  const forgotForm = document.getElementById('forgot-form');
 
   // State Variables
   let currentUser = null;
@@ -174,11 +168,9 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('logout-btn').addEventListener('click', logout);
       } else {
         userNav.innerHTML = `
-          <button id="open-login-btn" class="nav-btn primary">Log In</button>
-          <button id="open-signup-btn" class="nav-btn secondary">Sign Up</button>
+          <button id="open-login-btn" class="nav-btn primary">Sign In</button>
         `;
-        document.getElementById('open-login-btn').addEventListener('click', () => openAuthModal('login'));
-        document.getElementById('open-signup-btn').addEventListener('click', () => openAuthModal('signup'));
+        document.getElementById('open-login-btn').addEventListener('click', openAuthModal);
       }
     }
   }
@@ -803,10 +795,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function openAuthModal(tab = 'login') {
+  function openAuthModal() {
     authAlert.classList.add('hidden');
     authModal.classList.remove('hidden');
-    switchAuthTab(tab);
     initModalGoogleAuth();
   }
 
@@ -814,111 +805,8 @@ document.addEventListener('DOMContentLoaded', () => {
     authModal.classList.add('hidden');
   }
 
-  function switchAuthTab(tab) {
-    authAlert.classList.add('hidden');
-    if (tab === 'login') {
-      tabLogin.classList.add('active');
-      tabSignup.classList.remove('active');
-      loginForm.classList.remove('hidden');
-      signupForm.classList.add('hidden');
-      if (forgotForm) forgotForm.classList.add('hidden');
-    } else {
-      tabSignup.classList.add('active');
-      tabLogin.classList.remove('active');
-      signupForm.classList.remove('hidden');
-      loginForm.classList.add('hidden');
-      if (forgotForm) forgotForm.classList.add('hidden');
-    }
-  }
-
   closeAuthBtn.addEventListener('click', closeAuthModal);
 
-  loginForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const email = document.getElementById('login-email').value.trim();
-    const password = document.getElementById('login-password').value;
-
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error?.message || 'Login failed');
-
-      localStorage.setItem('token', data.token || data.accessToken);
-      localStorage.setItem('user', JSON.stringify(data.user));
-      currentUser = data.user;
-      updateUserUI();
-      closeAuthModal();
-      showToast(`Welcome back, ${currentUser.name}!`, 'success');
-      fetchSeatMap(currentShowId);
-    } catch (err) {
-      authAlert.textContent = err.message;
-      authAlert.classList.remove('hidden');
-    }
-  });
-
-  const forgotLink = document.getElementById('forgot-link');
-  const forgotBack = document.getElementById('forgot-back');
-  if (forgotLink) forgotLink.addEventListener('click', (e) => {
-    e.preventDefault();
-    authAlert.classList.add('hidden');
-    tabLogin.classList.remove('active');
-    tabSignup.classList.remove('active');
-    loginForm.classList.add('hidden');
-    signupForm.classList.add('hidden');
-    forgotForm.classList.remove('hidden');
-  });
-  if (forgotBack) forgotBack.addEventListener('click', (e) => {
-    e.preventDefault();
-    switchAuthTab('login');
-  });
-  if (forgotForm) forgotForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const email = document.getElementById('forgot-email').value.trim();
-    try {
-      const res = await fetch("/api/auth/forgot-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email })
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error?.message || "Request failed");
-      showToast(data.message, 'success');
-    } catch (err) {
-      authAlert.textContent = err.message;
-      authAlert.classList.remove('hidden');
-    }
-  });
-  signupForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const name = document.getElementById('signup-name').value.trim();
-    const email = document.getElementById('signup-email').value.trim();
-    const password = document.getElementById('signup-password').value;
-
-    try {
-      const res = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, password })
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error?.message || 'Registration failed');
-
-      localStorage.setItem('token', data.token || data.accessToken);
-      localStorage.setItem('user', JSON.stringify(data.user));
-      currentUser = data.user;
-      updateUserUI();
-      closeAuthModal();
-      showToast(`Account created! Welcome, ${currentUser.name}`, 'success');
-      fetchSeatMap(currentShowId);
-    } catch (err) {
-      authAlert.textContent = err.message;
-      authAlert.classList.remove('hidden');
-    }
-  });
 
   function escapeHtml(str) {
     if (!str) return '';

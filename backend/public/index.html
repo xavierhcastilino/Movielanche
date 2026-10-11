@@ -21,8 +21,7 @@
 
       <div class="user-nav" id="user-nav">
         <!-- Rendered dynamically by app.js: User Badge & Logout -->
-        <button id="open-login-btn" class="nav-btn primary">Log In</button>
-        <button id="open-signup-btn" class="nav-btn secondary">Sign Up</button>
+        <button id="open-login-btn" class="nav-btn primary">Sign In</button>
       </div>
     </div>
   </header>
@@ -205,14 +204,11 @@
     </div>
   </div>
 
-  <!-- User Log In / Sign Up Modal -->
+  <!-- User Authentication Modal -->
   <div id="auth-modal" class="modal hidden">
     <div class="modal-content auth-modal-content">
       <button id="close-auth-btn" class="close-btn">&times;</button>
-      <div class="auth-tabs">
-        <button id="tab-login" class="auth-tab active">Log In</button>
-        <button id="tab-signup" class="auth-tab">Sign Up</button>
-      </div>
+      <h2 style="text-align:center; margin-bottom: 1.25rem;">Sign In to MovieLanche</h2>
 
       <div id="auth-alert" class="auth-alert hidden"></div>
 
@@ -228,56 +224,6 @@
           </div>
         </div>
       </div>
-
-      <div style="display:flex; align-items:center; margin: 1rem 0; color: var(--text-muted); font-size: 0.8rem; text-transform: uppercase;">
-        <span style="flex:1; border-bottom:1px solid var(--card-border);"></span>
-        <span style="padding: 0 0.5rem;">or with email</span>
-        <span style="flex:1; border-bottom:1px solid var(--card-border);"></span>
-      </div>
-
-      <form id="login-form" class="auth-form">
-        <h2>Welcome Back</h2>
-        <div class="form-group">
-          <label for="login-email">Email Address</label>
-          <input type="email" id="login-email" required placeholder="alice@example.com" />
-        </div>
-        <div class="form-group">
-          <label for="login-password">Password</label>
-          <input type="password" id="login-password" required placeholder="••••••••" />
-        </div>
-        <button type="submit" class="submit-btn">Log In</button>
-        <div style="text-align:center; margin-top:0.6rem;">
-          <a href="#" id="forgot-link" style="font-size:0.82rem;">Forgot password?</a>
-        </div>
-      </form>
-
-      <form id="forgot-form" class="auth-form hidden">
-        <h2>Reset Password</h2>
-        <div class="form-group">
-          <label for="forgot-email">Email Address</label>
-          <input type="email" id="forgot-email" required placeholder="alice@example.com" />
-        </div>
-        <button type="submit" class="submit-btn">Send Reset Link</button>
-        <div style="text-align:center; margin-top:0.6rem;">
-          <a href="#" id="forgot-back" style="font-size:0.82rem;">Back to Log In</a>
-        </div>
-
-      <form id="signup-form" class="auth-form hidden">
-        <h2>Create Account</h2>
-        <div class="form-group">
-          <label for="signup-name">Full Name</label>
-          <input type="text" id="signup-name" required placeholder="John Doe" />
-        </div>
-        <div class="form-group">
-          <label for="signup-email">Email Address</label>
-          <input type="email" id="signup-email" required placeholder="user@example.com" />
-        </div>
-        <div class="form-group">
-          <label for="signup-password">Password (min. 6 chars)</label>
-          <input type="password" id="signup-password" required minlength="6" placeholder="••••••••" />
-        </div>
-        <button type="submit" class="submit-btn">Sign Up</button>
-      </form>
     </div>
   </div>
 
