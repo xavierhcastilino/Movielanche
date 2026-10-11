@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="360" viewBox="0 0 960 360" role="img" aria-labelledby="title desc">
+  <title id="title">MOVIELANCHE</title>
+  <desc id="desc">MOVIELANCHE — AN AVALANCHE OF MOVIES. Original three-facet poppy-red cinematic slash against black.</desc>
+  <rect width="960" height="360" fill="#080808"/>
+  <g fill="#FF3B30">
+    <path d="M104 280 202 86l98 194h-46l-52-105-53 105z" opacity=".7"/>
+    <path d="m222 280 99-210 106 210h-48l-58-117-57 117z"/>
+    <path d="m357 280 74-156 79 156h-46l-34-69-34 69z" opacity=".82"/>
+    <path d="m319 65 76-33-11 23-76 33z" opacity=".92"/>
+  </g>
+  <text x="505" y="185" fill="#F5F5F5" font-family="Arial,sans-serif" font-size="67" font-weight="800" letter-spacing="7">MOVIELANCHE</text>
+  <text x="512" y="230" fill="#A5A5A5" font-family="Arial,sans-serif" font-size="18" font-weight="600" letter-spacing="6">AN AVALANCHE OF MOVIES.</text>
+</svg>
