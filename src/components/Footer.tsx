@@ -5,7 +5,7 @@ export function Footer() {
     <footer className="site-footer">
       <div className="page-wrap site-footer__top">
         <div>
-          <Link to="/" className="footer-brand"><span className="brand__mark" aria-hidden="true"><i /><i /><i /></span> MOVIELANCHE</Link>
+          <Link to="/" className="footer-brand"><img className="brand__mark" src="/brand/emblem.png" alt="" /> MOVIELANCHE</Link>
           <p className="site-footer__tagline">AN AVALANCHE OF MOVIES.</p>
           <p className="site-footer__note">A better seat for your next great story.</p>
         </div>

@@ -20,7 +20,7 @@ export function Navbar() {
     <header className="site-header">
       <div className="site-header__inner page-wrap">
         <Link to="/" className="brand" aria-label="MOVIELANCHE home" onClick={() => setMenuOpen(false)}>
-          <span className="brand__mark" aria-hidden="true"><i /><i /><i /></span>
+          <img className="brand__mark" src="/brand/emblem.png" alt="" />
           <span className="brand__word">MOVIE<span>LANCHE</span><small>AN AVALANCHE OF MOVIES.</small></span>
         </Link>
         <nav className={`main-nav ${menuOpen ? 'main-nav--open' : ''}`} aria-label="Main navigation">

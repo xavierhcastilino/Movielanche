@@ -6,7 +6,7 @@ export function OnboardingLayout({ step, eyebrow, children }: { step: string; ey
       <div className="onboarding-shell__glow" aria-hidden="true" />
       <header className="onboarding-header">
         <Link to="/auth" className="brand onboarding-brand" aria-label="MOVIELANCHE welcome">
-          <span className="brand__mark" aria-hidden="true"><i /><i /><i /></span>
+          <img className="brand__mark" src="/brand/emblem.png" alt="" />
           <span className="brand__word">MOVIE<span>LANCHE</span><small>AN AVALANCHE OF MOVIES.</small></span>
         </Link>
         <span className="onboarding-header__step">{step}</span>

@@ -26,7 +26,7 @@ export function TicketCard({ booking, reveal = false }: TicketCardProps) {
           <ImageWithFallback src={backdrop} alt="" className="ticket-card__backdrop-image" />
           <span className="ticket-card__backdrop-label">NOW PLAYING · MOVIELANCHE</span>
         </div>
-        <div className="ticket-card__brand"><span className="brand__mark" aria-hidden="true"><i /><i /><i /></span> MOVIELANCHE <small>AN AVALANCHE OF MOVIES.</small></div>
+        <div className="ticket-card__brand"><img className="brand__mark" src="/brand/emblem.png" alt="" /> MOVIELANCHE <small>AN AVALANCHE OF MOVIES.</small></div>
         <div className="ticket-card__movie">
           <ImageWithFallback src={booking.poster} alt={`${booking.movieTitle} poster`} className="ticket-card__poster" />
           <div><span className="eyebrow">YOUR CINEMA TICKET</span><h2>{booking.movieTitle}</h2><span className="ticket-chip">{booking.movieLanguage ? `${booking.movieLanguage} · ` : ''}{booking.format}{booking.movieDuration ? ` · ${booking.movieDuration}` : ''}</span></div>
