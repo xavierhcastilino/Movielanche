@@ -60,11 +60,18 @@ router.get('/', async (req, res) => {
     where.push(`genre ILIKE $${params.length}`);
   }
 
+  // Pushed BEFORE the SQL is built so the placeholder indices line up.
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 100);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+  params.push(limit, offset);
+  const limitIdx = params.length - 1;
+  const offsetIdx = params.length;
+
   const sql = `
     SELECT *
     FROM movie_details
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-    ORDER BY movie_id ASC`;
+    ORDER BY movie_id ASC LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
 
   try {
     const result = await db.query(sql, params);

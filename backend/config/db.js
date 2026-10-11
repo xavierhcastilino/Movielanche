@@ -20,11 +20,15 @@ const dbHost = process.env.HOST;
 const dbPort = parseInt(process.env.PORT || 5432,10);
 const dbName = process.env.DB_NAME;
 
+const _dbUrl = process.env.DATABASE_URL || "";
+const _urlIsLocal = /@(?:localhost|127\.0\.0\.1)(:|\/|$)/.test(_dbUrl);
+const _hostIsLocal = /^(localhost|127\.0\.0\.1|movielanche-pg|postgres)$/i.test(dbHost || "");
+const _useSsl = _dbUrl ? !_urlIsLocal : !_hostIsLocal;
 const pool = new Pool(
   process.env.DATABASE_URL
     ? {
         connectionString: process.env.DATABASE_URL,
-        ssl: { rejectUnauthorized: false }
+        ...(_useSsl ? { ssl: { rejectUnauthorized: false } } : {})
       }
     : {
         user: dbUser,
@@ -32,7 +36,7 @@ const pool = new Pool(
         database: dbName,
         password: dbPassword,
         port: dbPort,
-        ssl: { rejectUnauthorized: false }
+        ...(_useSsl ? { ssl: { rejectUnauthorized: false } } : {})
       }
 );
 

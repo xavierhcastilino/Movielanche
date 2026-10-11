@@ -1,9 +1,9 @@
 -- Movielanche schema (PostgreSQL)
 
 -- Drop existing views and tables to ensure clean schema build
-DROP VIEW IF EXISTS shows CASCADE;
-DROP VIEW IF EXISTS seats CASCADE;
-DROP VIEW IF EXISTS theatre_details CASCADE;
+DROP TABLE IF EXISTS shows CASCADE;
+DROP TABLE IF EXISTS seats CASCADE;
+DROP TABLE IF EXISTS theatre_details CASCADE;
 
 DROP TABLE IF EXISTS booking_seats CASCADE;
 DROP TABLE IF EXISTS bookings CASCADE;
@@ -161,3 +161,12 @@ CREATE INDEX IF NOT EXISTS locking_logs_show_seat_idx ON locking_logs (show_id, 
 CREATE INDEX IF NOT EXISTS locking_logs_user_idx ON locking_logs (user_id);
 CREATE INDEX IF NOT EXISTS demo_seats_show_status_idx ON demo_seats (show_id, status);
 CREATE INDEX IF NOT EXISTS user_timeouts_until_idx ON user_timeouts (timeout_until);
+
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  id         SERIAL PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at    TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const express = require('express');
 const { OAuth2Client } = require('google-auth-library');
 const db = require('../config/db');
+const { resetUrlForToken, sendPasswordResetEmail } = require('../config/mailer');
 const { isPlainObject, withinBcryptLimit, MAX_NAME_LENGTH } = require('../config/validate');
 
 const router = express.Router();
@@ -296,5 +297,68 @@ router.get('/me', requireAuth, async (req, res) => {
   }
 });
 
+
+// POST /api/auth/forgot-password - request a reset link by email.
+// Always returns 200 so the response never reveals whether an email is registered.
+router.post('/forgot-password', async (req, res) => {
+  const done = { success: true, message: 'If that email is registered, a reset link is on its way.' };
+  const body = req.body || {};
+  const targetEmail = ((body.email || body.email_id) || '').trim().toLowerCase();
+  if (!targetEmail || !EMAIL_RE.test(targetEmail)) return res.json(done);
+  try {
+    const found = await db.query(
+      'SELECT user_id FROM users WHERE email_id = $1 OR email = $1',
+      [targetEmail]
+    );
+    if (found.rowCount === 0) {
+      await bcrypt.compare('movielanche-timing-equaliser', DUMMY_HASH);
+      return res.json(done);
+    }
+    const userId = found.rows[0].user_id;
+    await db.query('DELETE FROM password_reset_tokens WHERE user_id = $1 AND used_at IS NULL', [userId]);
+    const raw = crypto.randomBytes(32).toString('hex');
+    const hash = crypto.createHash('sha256').update(raw).digest('hex');
+    await db.query(
+      'INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + INTERVAL \'20 minutes\')',
+      [userId, hash]
+    );
+    await sendPasswordResetEmail(targetEmail, resetUrlForToken(req, raw));
+    return res.json(done);
+  } catch (err) {
+    console.error('Forgot-password error:', err.message);
+    return res.json(done);
+  }
+});
+
+// POST /api/auth/reset-password - set a new password with a valid reset token.
+router.post('/reset-password', async (req, res) => {
+  const body = req.body || {};
+  if (!body.token || typeof body.token !== 'string') {
+    return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'Reset token is required' } });
+  }
+  if (typeof body.password !== 'string' || body.password.length < MIN_PASSWORD_LENGTH) {
+    return res.status(400).json({
+      error: { code: 'BAD_REQUEST', message: 'Password must be at least ' + MIN_PASSWORD_LENGTH + ' characters' },
+    });
+  }
+  try {
+    const hash = crypto.createHash('sha256').update(body.token).digest('hex');
+    const found = await db.query(
+      'SELECT id, user_id FROM password_reset_tokens WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()',
+      [hash]
+    );
+    if (found.rowCount === 0) {
+      return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'Reset link is invalid or has expired' } });
+    }
+    const passwordHash = await bcrypt.hash(body.password, 10);
+    await db.query('UPDATE users SET password_hash = $1 WHERE user_id = $2', [passwordHash, found.rows[0].user_id]);
+    await db.query('UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1', [found.rows[0].id]);
+    await db.query('DELETE FROM password_reset_tokens WHERE user_id = $1 AND used_at IS NULL', [found.rows[0].user_id]);
+    return res.json({ success: true, message: 'Password has been reset. You can now log in.' });
+  } catch (err) {
+    console.error('Reset-password error:', err.message);
+    return res.status(500).json({ error: { code: 'SERVER_ERROR', message: 'Password reset failed' } });
+  }
+});
 module.exports = router;
 module.exports.requireAuth = requireAuth;

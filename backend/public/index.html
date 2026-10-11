@@ -246,7 +246,21 @@
           <input type="password" id="login-password" required placeholder="••••••••" />
         </div>
         <button type="submit" class="submit-btn">Log In</button>
+        <div style="text-align:center; margin-top:0.6rem;">
+          <a href="#" id="forgot-link" style="font-size:0.82rem;">Forgot password?</a>
+        </div>
       </form>
+
+      <form id="forgot-form" class="auth-form hidden">
+        <h2>Reset Password</h2>
+        <div class="form-group">
+          <label for="forgot-email">Email Address</label>
+          <input type="email" id="forgot-email" required placeholder="alice@example.com" />
+        </div>
+        <button type="submit" class="submit-btn">Send Reset Link</button>
+        <div style="text-align:center; margin-top:0.6rem;">
+          <a href="#" id="forgot-back" style="font-size:0.82rem;">Back to Log In</a>
+        </div>
 
       <form id="signup-form" class="auth-form hidden">
         <h2>Create Account</h2>

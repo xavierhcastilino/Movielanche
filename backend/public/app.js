@@ -65,6 +65,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const loginForm = document.getElementById('login-form');
   const signupForm = document.getElementById('signup-form');
   const authAlert = document.getElementById('auth-alert');
+  const forgotForm = document.getElementById('forgot-form');
 
   // State Variables
   let currentUser = null;
@@ -820,11 +821,13 @@ document.addEventListener('DOMContentLoaded', () => {
       tabSignup.classList.remove('active');
       loginForm.classList.remove('hidden');
       signupForm.classList.add('hidden');
+      if (forgotForm) forgotForm.classList.add('hidden');
     } else {
       tabSignup.classList.add('active');
       tabLogin.classList.remove('active');
       signupForm.classList.remove('hidden');
       loginForm.classList.add('hidden');
+      if (forgotForm) forgotForm.classList.add('hidden');
     }
   }
 
@@ -857,6 +860,38 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  const forgotLink = document.getElementById('forgot-link');
+  const forgotBack = document.getElementById('forgot-back');
+  if (forgotLink) forgotLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    authAlert.classList.add('hidden');
+    tabLogin.classList.remove('active');
+    tabSignup.classList.remove('active');
+    loginForm.classList.add('hidden');
+    signupForm.classList.add('hidden');
+    forgotForm.classList.remove('hidden');
+  });
+  if (forgotBack) forgotBack.addEventListener('click', (e) => {
+    e.preventDefault();
+    switchAuthTab('login');
+  });
+  if (forgotForm) forgotForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('forgot-email').value.trim();
+    try {
+      const res = await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error?.message || "Request failed");
+      showToast(data.message, 'success');
+    } catch (err) {
+      authAlert.textContent = err.message;
+      authAlert.classList.remove('hidden');
+    }
+  });
   signupForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const name = document.getElementById('signup-name').value.trim();
